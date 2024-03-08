@@ -1,0 +1,133 @@
+name: Dependabot to Gerrit action
+description: Pushes dependabot updates to gerrit
+
+inputs:
+
+  user:
+    description: 'Gerrit bot user'
+    required: true
+
+  email:
+    description: 'Gerrit bot email'
+    required: true
+
+  password:
+    description: 'Gerrit bot password'
+    required: true
+
+  dry_run:
+    description: 'Dont create anything'
+    required: false
+
+  sanitize_commit_message:
+    description: "Replace '---' divider with '----' to avoid problems with gerrit's commit-msg hook"
+    required: false
+
+  gitreview_project:
+    description: 'Gerrit project (if not defined, reads from .gitreview)'
+    required: false
+
+  gitreview_host:
+    description: 'Gerrit host (if not defined, reads from .gitreview)'
+    required: false
+
+runs:
+  using: "composite"
+  steps:
+      - uses: actions/checkout@v2
+      # - name: Checkout
+      #   shell: bash
+      #   run: |
+      #     REF=${{ github.event.pull_request.head.sha || github.sha }}
+      #     git -c protocol.version=2 fetch --no-tags --prune --progress --no-recurse-submodules --depth=10 origin ${REF}
+      #     git checkout --progress --force ${REF}
+
+      - name: Setup git config
+        shell: bash
+        run: |
+          git config user.name ${{ inputs.user }}
+          git config user.email ${{ inputs.email }}
+
+      - name: Setup git remote
+        shell: bash
+        env:
+          DEPENDABOT_GERRIT_USER: ${{ inputs.user }}
+          DEPENDABOT_GERRIT_PASSWORD: ${{ inputs.password }}
+          GITREVIEW_PROJECT: ${{ inputs.gitreview_project }}
+          GITREVIEW_HOST: ${{ inputs.gitreview_host }}
+        run: |
+          # Read these values from .gitreview if not provided
+          GITREVIEW_PROJECT=${GITREVIEW_PROJECT:-$(sed -n '/project=/ { s///; s/\.git//; p; }' .gitreview)}
+          GITREVIEW_HOST=${GITREVIEW_HOST:-$(sed -n '/host=/ s///p' .gitreview)}
+          # Make available in subsequent steps as well, to avoid needing to recalculate
+          echo "GITREVIEW_PROJECT=${GITREVIEW_PROJECT}" >> $GITHUB_ENV
+          echo "GITREVIEW_HOST=${GITREVIEW_HOST}" >> $GITHUB_ENV
+
+          # Create the authenticated remote for gerrit
+          git remote add gerrit "https://${DEPENDABOT_GERRIT_USER}:${DEPENDABOT_GERRIT_PASSWORD}@${GITREVIEW_HOST}/r/a/${GITREVIEW_PROJECT}"
+
+      # Generate the "randomness" for the change id from the branch name
+      # This means that multiple alterations to the PR will submit to the same Gerrit change
+      # This will result in the exact same update having the same Change-Id across multiple Gerrit repos
+      - name: Alter commit
+        shell: bash
+        run: |
+          random=$( echo ${{github.head_ref || github.sha }} | git hash-object --stdin)
+          # Make available in the abandon step as well, to avoid needing to recalculate
+          echo "GITREVIEW_RANDOM_CHANGEID=${random}" >> $GITHUB_ENV
+
+          GITHUB_EVENT=${{github.event.number}}
+
+          # Alter the commit message
+          MSG_OLD=$(git log --format=%B -n1)
+
+          # Check if we have event
+          if [ -n "${GITHUB_EVENT}" ]; then
+            MSG_PRE=$([[ "${{ github.event.action }}" == "closed" ]] && echo "Closed: " || true)
+            MSG_GH_PR="Pull Request: https://github.com/${{github.repository}}/pull/${{ github.event.number }}"
+          else
+            MSG_PRE=""
+            MSG_GH_PR=""
+          fi
+
+          # Sanitize commit message if requested
+          if [[ "${{inputs.sanitize_commit_message}}" == "true" ]]; then
+            MSG_OLD=$(sed 's/^---$/----/' <<< "$MSG_OLD")
+          fi
+
+          MSG_CHANGE_ID="Change-Id: I${random}"
+          MSG_NEW=$(printf "$MSG_PRE$MSG_OLD\n$MSG_GH_PR\n$MSG_CHANGE_ID")
+          git commit --amend -m"$MSG_NEW"
+
+          # Also reset the author, per our git config
+          git commit --amend --no-edit --reset-author
+
+          # And output the final message
+          git log -n1
+
+          ID_LINK=I${random}
+          echo "::warning::https://${{ env.GITREVIEW_HOST }}/r/q/$ID_LINK"
+
+      - name: Submit to Gerrit
+        shell: bash
+        run: |
+          COMMAND="git push gerrit HEAD:refs/for/${{ github.event.pull_request.base.ref }}%${{format('ready,m=Triggered_from_a_{1}_event_on_Github,hashtag=dependabot,hashtag={0}', join( github.event.pull_request.labels.*.name, ',hashtag='), github.event.action)}}"
+          $([[ "${{inputs.dry_run}}" == "true" ]] || $COMMAND)
+
+      - name: Abandon closed patch
+        if: ${{ github.event.action == 'closed' }}
+        shell: bash
+        env:
+          DEPENDABOT_GERRIT_USER: ${{ inputs.user }}
+          DEPENDABOT_GERRIT_PASSWORD: ${{ inputs.password }}
+        run: |
+          # Project, host, and change id are added to the environment in prior steps
+          # Need to replace `/` with `%2F` in project name
+          GITREVIEW_PROJECT_ESCAPED=$(echo "${{env.GITREVIEW_PROJECT}}" | sed 's/\//%2F/g')
+          # See https://gerrit.wikimedia.org/r/Documentation/rest-api-changes.html#change-id for change ids, should
+          # be project~branch~id
+          GITREVIEW_CHANGE="$GITREVIEW_PROJECT_ESCAPED~${{ github.event.pull_request.base.ref }}~I${{ env.GITREVIEW_RANDOM_CHANGEID }}"
+          # See https://gerrit.wikimedia.org/r/Documentation/rest-api-changes.html#abandon-change for the format
+          ABANDON_URL=https://${{ env.GITREVIEW_HOST }}/r/a/changes/$GITREVIEW_CHANGE/abandon
+          COMMAND="curl -X POST --silent -u ${DEPENDABOT_GERRIT_USER}:${DEPENDABOT_GERRIT_PASSWORD} $ABANDON_URL"
+          $([[ "${{inputs.dry_run}}" == "true" ]] || $COMMAND > /dev/null)

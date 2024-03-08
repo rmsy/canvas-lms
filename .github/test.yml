@@ -1,0 +1,20 @@
+name: Dependabot to Gerrit
+
+on:
+ pull_request_target:
+   types: [opened, reopened, synchronize, closed]
+
+jobs:
+  open-or-update-change:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+
+      - name: Run dependabot gerrit action
+        uses: ./.github/actions/dependabot-to-gerrit
+        with:
+          password: ${{ secrets.DEPENDABOT_GERRIT_PASSWORD }}
+          user: isaac.moore
+          email: isaac.moore@instructure.com
+          gitreview_host: gerrit.instructure.com
+          gitreview_project: canvas-lms
