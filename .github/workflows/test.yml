@@ -17,4 +17,4 @@ jobs:
           user: isaac.moore
           email: isaac.moore@instructure.com
           gitreview_host: gerrit.instructure.com
-          gitreview_project: canvas-lms
+          gitreview_project: canvas-lms.git

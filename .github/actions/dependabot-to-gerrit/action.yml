@@ -35,12 +35,12 @@ runs:
   using: "composite"
   steps:
       - uses: actions/checkout@v2
-      # - name: Checkout
-      #   shell: bash
-      #   run: |
-      #     REF=${{ github.event.pull_request.head.sha || github.sha }}
-      #     git -c protocol.version=2 fetch --no-tags --prune --progress --no-recurse-submodules --depth=10 origin ${REF}
-      #     git checkout --progress --force ${REF}
+      - name: Checkout
+        shell: bash
+        run: |
+          REF=${{ github.event.pull_request.head.sha || github.sha }}
+          git -c protocol.version=2 fetch --no-tags --prune --progress --no-recurse-submodules --depth=10 origin ${REF}
+          git checkout --progress --force ${REF}
 
       - name: Setup git config
         shell: bash
@@ -64,7 +64,7 @@ runs:
           echo "GITREVIEW_HOST=${GITREVIEW_HOST}" >> $GITHUB_ENV
 
           # Create the authenticated remote for gerrit
-          git remote add gerrit "https://${DEPENDABOT_GERRIT_USER}:${DEPENDABOT_GERRIT_PASSWORD}@${GITREVIEW_HOST}/r/a/${GITREVIEW_PROJECT}"
+          git remote add gerrit "https://${DEPENDABOT_GERRIT_USER}:${DEPENDABOT_GERRIT_PASSWORD}@${GITREVIEW_HOST}/a/${GITREVIEW_PROJECT}"
 
       # Generate the "randomness" for the change id from the branch name
       # This means that multiple alterations to the PR will submit to the same Gerrit change
@@ -106,7 +106,7 @@ runs:
           git log -n1
 
           ID_LINK=I${random}
-          echo "::warning::https://${{ env.GITREVIEW_HOST }}/r/q/$ID_LINK"
+          echo "::warning::https://${{ env.GITREVIEW_HOST }}/q/$ID_LINK"
 
       - name: Submit to Gerrit
         shell: bash
@@ -128,6 +128,6 @@ runs:
           # be project~branch~id
           GITREVIEW_CHANGE="$GITREVIEW_PROJECT_ESCAPED~${{ github.event.pull_request.base.ref }}~I${{ env.GITREVIEW_RANDOM_CHANGEID }}"
           # See https://gerrit.wikimedia.org/r/Documentation/rest-api-changes.html#abandon-change for the format
-          ABANDON_URL=https://${{ env.GITREVIEW_HOST }}/r/a/changes/$GITREVIEW_CHANGE/abandon
+          ABANDON_URL=https://${{ env.GITREVIEW_HOST }}/a/changes/$GITREVIEW_CHANGE/abandon
           COMMAND="curl -X POST --silent -u ${DEPENDABOT_GERRIT_USER}:${DEPENDABOT_GERRIT_PASSWORD} $ABANDON_URL"
           $([[ "${{inputs.dry_run}}" == "true" ]] || $COMMAND > /dev/null)
